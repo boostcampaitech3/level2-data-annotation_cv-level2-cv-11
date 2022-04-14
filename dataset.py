@@ -9,7 +9,7 @@ import cv2
 import albumentations as A
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
-
+from get_rect import minimum_bounding_rectangle as get_mbr
 
 def cal_distance(x1, y1, x2, y2):
     '''calculate the Euclidean distance'''
@@ -335,13 +335,18 @@ def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
 
 class SceneTextDataset(Dataset):
     def __init__(self, root_dir, split='train', image_size=1024, crop_size=512, color_jitter=True,
-                 normalize=True):
+                 normalize=True, path = ['images', 'new_images']):
         with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
             anno = json.load(f)
 
         self.anno = anno
-        self.image_fnames = sorted(anno['images'].keys())
-        self.image_dir = osp.join(root_dir, 'images')
+        self.path = path # new value
+        self.original_len_img = len(anno['images'])
+        self.image_fnames, self.image_dir = [], []
+        for img in path:
+            self.image_fnames += sorted(anno[img].keys())
+            self.image_dir.append(osp.join(root_dir, img)) # rename
+        print('image size:', self.original_len_img, len(self.image_fnames)-self.original_len_img)
 
         self.image_size, self.crop_size = image_size, crop_size
         self.color_jitter, self.normalize = color_jitter, normalize
@@ -351,14 +356,26 @@ class SceneTextDataset(Dataset):
 
     def __getitem__(self, idx):
         image_fname = self.image_fnames[idx]
-        image_fpath = osp.join(self.image_dir, image_fname)
+        if int(idx) < self.original_len_img: # count len of original img
+            image_fpath = osp.join(self.image_dir[0], image_fname)
+            self.img_path = self.path[0]
+        else:
+            image_fpath = osp.join(self.image_dir[1], image_fname)
+            self.img_path = self.path[1]
 
         vertices, labels = [], []
-        for word_info in self.anno['images'][image_fname]['words'].values():
-            vertices.append(np.array(word_info['points']).flatten())
+        for word_info in self.anno[self.img_path][image_fname]['words'].values(): # Change 'image' to self.img_path
+            ## add part, convert minimum bounding box
+            vertice = np.array(word_info['points'])
+            if len(vertice) != 4:
+                #print('shape', vertice.shape)
+                vertice = get_mbr(vertice)
+            ###
+            vertices.append(vertice.flatten())
             labels.append(int(not word_info['illegibility']))
-        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
 
+        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+        #print('vertices shape', vertices.shape)
         vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
 
         image = Image.open(image_fpath)
