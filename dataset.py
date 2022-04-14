@@ -220,7 +220,8 @@ def crop_img(img, vertices, labels, length):
         cnt += 1
         start_w = int(np.random.rand() * remain_w)
         start_h = int(np.random.rand() * remain_h)
-        flag = is_cross_text([start_w, start_h], length, new_vertices[labels==1,:])
+        if len(new_vertices) == 2:
+            flag = is_cross_text([start_w, start_h], length, new_vertices[labels==1,:])
     box = (start_w, start_h, start_w + length, start_h + length)
     region = img.crop(box)
     if new_vertices.size == 0:
