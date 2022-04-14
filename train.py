@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=5)
-    parser.add_argument('--wandb_plot', type=bool, default=True)
+    parser.add_argument('--wandb_plot', type=bool, default=False)
 
     args = parser.parse_args()
 
