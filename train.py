@@ -14,6 +14,7 @@ from tqdm import tqdm
 from east_dataset import EASTDataset
 from dataset import SceneTextDataset
 from model import EAST
+import wandb
 
 
 def parse_args():
@@ -26,14 +27,15 @@ def parse_args():
                                                                         'trained_models'))
 
     parser.add_argument('--device', default='cuda' if cuda.is_available() else 'cpu')
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=8)
 
     parser.add_argument('--image_size', type=int, default=1024)
     parser.add_argument('--input_size', type=int, default=512)
-    parser.add_argument('--batch_size', type=int, default=12)
+    parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=5)
+    parser.add_argument('--wandb_plot', type=bool, default=True)
 
     args = parser.parse_args()
 
@@ -44,7 +46,12 @@ def parse_args():
 
 
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval):
+                learning_rate, max_epoch, save_interval, wandb_plot):
+    
+    # wandb init
+    if wandb_plot:
+        wandb.init(project="ocr-model", entity="canvas11", name = "NAME")
+
     dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)
     dataset = EASTDataset(dataset)
     num_batches = math.ceil(len(dataset) / batch_size)
@@ -59,6 +66,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     model.train()
     for epoch in range(max_epoch):
         epoch_loss, epoch_start = 0, time.time()
+        cls_loss, angle_loss, iou_loss = 0, 0, 0
         with tqdm(total=num_batches) as pbar:
             for img, gt_score_map, gt_geo_map, roi_mask in train_loader:
                 pbar.set_description('[Epoch {}]'.format(epoch + 1))
@@ -76,9 +84,20 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                     'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
                     'IoU loss': extra_info['iou_loss']
                 }
+
+                cls_loss += extra_info['cls_loss']
+                angle_loss += extra_info['angle_loss']
+                iou_loss += extra_info['iou_loss']
+
                 pbar.set_postfix(val_dict)
 
         scheduler.step()
+        
+        if wandb_plot:
+            wandb.log({'Train/Mean loss': epoch_loss / num_batches,
+                    'Train/Cls loss': cls_loss/num_batches, 
+                    'Train/Angle loss': angle_loss/num_batches,
+                    'Train/IoU loss': iou_loss/num_batches})
 
         print('Mean loss: {:.4f} | Elapsed time: {}'.format(
             epoch_loss / num_batches, timedelta(seconds=time.time() - epoch_start)))
