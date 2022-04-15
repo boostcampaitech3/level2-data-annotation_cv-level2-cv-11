@@ -54,7 +54,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     
     # wandb init
     if wandb_plot:
-        wandb.init(project="ocr-model", entity="canvas11", name = "HEO-val-test")
+        wandb.init(project="ocr-model", entity="canvas11", name = "NAME")
 
     train_dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size) # split에 train의 [].json의 [] 부분을 입력.
     train_dataset = EASTDataset(train_dataset)
