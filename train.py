@@ -40,6 +40,7 @@ def parse_args():
     parser.add_argument('--validate', type=bool, default=False)
     parser.add_argument('--val_interval', type=int, default=5, help='validate per n(default=5) epochs')
 
+
     args = parser.parse_args()
 
     if args.input_size % 32 != 0:
@@ -65,6 +66,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
         val_dataset = EASTDataset(val_dataset)
         val_num_batches = math.ceil(len(val_dataset) / batch_size)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
