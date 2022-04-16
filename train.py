@@ -12,6 +12,8 @@ from torch.utils.data import DataLoader
 from torch.optim import lr_scheduler
 from tqdm import tqdm
 
+from deteval import calc_deteval_metrics
+from detect import detect, get_bboxes
 from east_dataset import EASTDataset
 from dataset import SceneTextDataset
 from model import EAST
@@ -53,7 +55,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     
     # wandb init
     if wandb_plot:
-        wandb.init(project="ocr-model", entity="canvas11", name = "HEO-val-test")
+        wandb.init(project="ocr-model", entity="canvas11", name = "HEO-validate")
 
     train_dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size) # split에 train의 [].json의 [] 부분을 입력.
     train_dataset = EASTDataset(train_dataset)
@@ -61,7 +63,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
     if validate:
-        val_dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)# split에 val의 [].json의 [] 부분을 입력.
+        val_dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size) # split에 val의 [].json의 [] 부분을 입력.
         val_dataset = EASTDataset(val_dataset)
         val_num_batches = math.ceil(len(val_dataset) / batch_size)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
@@ -102,7 +104,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
                 pbar.set_postfix(val_dict)
 
-        print('Mean loss: {:.4f} | Elapsed time: {}'.format(
+        print('Train Mean loss: {:.4f} | Elapsed time: {}'.format(
             epoch_loss / train_num_batches, timedelta(seconds=time.time() - epoch_start)))    
 
         if wandb_plot:
@@ -116,31 +118,45 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
             model.eval()
             with torch.no_grad():
                 epoch_loss, epoch_start = 0, time.time()
-                cls_loss, angle_loss, iou_loss = 0, 0, 0
+                # cls_loss, angle_loss, iou_loss = 0, 0, 0
+                prec, rec, hm = 0, 0, 0
                 with tqdm(total=val_num_batches) as vbar:
                     for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
-                        vbar.set_description('[Validatae]')
+                        vbar.set_description('[Validate]')
+                        import cv2
+                        print((cv2.imread('/opt/ml/input/data/ICDAR17_Korean/images/0F885DC0-3E65-4081-9DBB-CA96BB6FD4FC.JPG')[:, :, ::-1]).shape)
+                        print((cv2.imread('/opt/ml/input/data/ICDAR17_Korean/images/0F885DC0-3E65-4081-9DBB-CA96BB6FD4FC.JPG').shape))
+                        print(img.shape)
+                        pred_bboxes = detect(model, img.numpy(), input_size)
+                        gt_bboxes = get_bboxes(gt_score_map, gt_geo_map)
 
-                        loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
+                        res_dict = calc_deteval_metrics(pred_bboxes_dict=pred_bboxes, gt_bboxes_dict=gt_bboxes)
+
+                        # loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
                         
-                        loss_val = loss.item()
-                        epoch_loss += loss_val
+                        # loss_val = loss.item()
+                        # epoch_loss += loss_val
 
                         vbar.update(1)
-                        val_dict = {
-                            'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
-                            'IoU loss': extra_info['iou_loss']
-                        }
+                        # val_dict = {
+                        #     'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
+                        #     'IoU loss': extra_info['iou_loss']
+                        # }
 
-                        cls_loss += extra_info['cls_loss']
-                        angle_loss += extra_info['angle_loss']
-                        iou_loss += extra_info['iou_loss']
+                        # cls_loss += extra_info['cls_loss']
+                        # angle_loss += extra_info['angle_loss']
+                        # iou_loss += extra_info['iou_loss']
+                        prec += res_dict['total']['precision']
+                        rec += res_dict['total']['recall']
+                        hm += res_dict['total']['hmean']
 
-                        vbar.set_postfix(val_dict)
+                        # vbar.set_postfix(val_dict)
+                        vbar.set_postfix(res_dict)
             
-            print('Val Mean loss: {:.4f} | Elapsed time: {}'.format(
-                epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
-
+            # print('Validate Mean loss: {:.4f} | Elapsed time: {}'.format(
+            #     epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
+            print('Validate Mean Precision: {:.4f} | Mean Recall: {:.4f} | Mean Hmean: {:.4f} | Elapsed time: {}'.format(
+                prec/val_num_batches, rec/val_num_batches, hm/val_num_batches, timedelta(seconds=time.time() - epoch_start)))
             if wandb_plot:
                 wandb.log({'Val/Mean loss': epoch_loss / val_num_batches,
                         'Val/Cls loss': cls_loss/val_num_batches, 
