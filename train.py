@@ -3,6 +3,7 @@ import os.path as osp
 from random import shuffle
 import time
 import math
+import json
 from datetime import timedelta
 from argparse import ArgumentParser
 
@@ -11,6 +12,7 @@ from torch import cuda
 from torch.utils.data import DataLoader
 from torch.optim import lr_scheduler
 from tqdm import tqdm
+from glob import glob
 
 from deteval import calc_deteval_metrics
 from detect import detect, get_bboxes
@@ -117,46 +119,64 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
             # validate loop
             model.eval()
             with torch.no_grad():
-                epoch_loss, epoch_start = 0, time.time()
-                # cls_loss, angle_loss, iou_loss = 0, 0, 0
-                prec, rec, hm = 0, 0, 0
-                with tqdm(total=val_num_batches) as vbar:
-                    for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
-                        vbar.set_description('[Validate]')
-                        import cv2
-                        print((cv2.imread('/opt/ml/input/data/ICDAR17_Korean/images/0F885DC0-3E65-4081-9DBB-CA96BB6FD4FC.JPG')[:, :, ::-1]).shape)
-                        print((cv2.imread('/opt/ml/input/data/ICDAR17_Korean/images/0F885DC0-3E65-4081-9DBB-CA96BB6FD4FC.JPG').shape))
-                        print(img.shape)
-                        pred_bboxes = detect(model, img.numpy(), input_size)
-                        gt_bboxes = get_bboxes(gt_score_map, gt_geo_map)
+                image_fnames, by_sample_bboxes = [], []
+                import cv2
+                images = []
+                for image_fpath in tqdm(glob(osp.join(data_dir, 'images_real/*'))):
+                    image_fnames.append(osp.basename(image_fpath))
 
-                        res_dict = calc_deteval_metrics(pred_bboxes_dict=pred_bboxes, gt_bboxes_dict=gt_bboxes)
+                    images.append(cv2.imread(image_fpath)[:, :, ::-1])
+                    if len(images) == batch_size:
+                        by_sample_bboxes.extend(detect(model, images, input_size))
+                        images = []
 
-                        # loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
+                if len(images):
+                    by_sample_bboxes.extend(detect(model, images, input_size))
+
+                ufo_result = dict(images=dict())
+                for image_fname, bboxes in zip(image_fnames, by_sample_bboxes):
+                    words_info = {idx: dict(points=bbox.tolist()) for idx, bbox in enumerate(bboxes)}
+                    ufo_result['images'][image_fname] = dict(words=words_info)
+                with open(osp.join(data_dir, 'ufo', 'train.json')) as f:
+                    res_dict = calc_deteval_metrics(pred_bboxes_dict=ufo_result, gt_bboxes_dict=json.load(f))
+                print(res_dict)
+            #     with tqdm(total=val_num_batches) as vbar:
+            #         for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
+            #             vbar.set_description('[Validate]')
+            #             # import cv2
+            #             # print((cv2.imread('/opt/ml/input/data/ICDAR17_Korean/images/0F885DC0-3E65-4081-9DBB-CA96BB6FD4FC.JPG')[:, :, ::-1]).shape)
+            #             # print((cv2.imread('/opt/ml/input/data/ICDAR17_Korean/images/0F885DC0-3E65-4081-9DBB-CA96BB6FD4FC.JPG').shape))
+            #             # print(torch.Tensor(img).permute(0, 2, 3, 1).numpy().shape)
+            #             pred_bboxes = detect(model, torch.Tensor(img).permute(0, 2, 3, 1).numpy(), input_size)
+            #             gt_bboxes = get_bboxes(gt_score_map, gt_geo_map)
+
+            #             res_dict = calc_deteval_metrics(pred_bboxes_dict=pred_bboxes, gt_bboxes_dict=gt_bboxes)
+
+            #             # loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
                         
-                        # loss_val = loss.item()
-                        # epoch_loss += loss_val
+            #             # loss_val = loss.item()
+            #             # epoch_loss += loss_val
 
-                        vbar.update(1)
-                        # val_dict = {
-                        #     'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
-                        #     'IoU loss': extra_info['iou_loss']
-                        # }
+            #             vbar.update(1)
+            #             # val_dict = {
+            #             #     'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
+            #             #     'IoU loss': extra_info['iou_loss']
+            #             # }
 
-                        # cls_loss += extra_info['cls_loss']
-                        # angle_loss += extra_info['angle_loss']
-                        # iou_loss += extra_info['iou_loss']
-                        prec += res_dict['total']['precision']
-                        rec += res_dict['total']['recall']
-                        hm += res_dict['total']['hmean']
+            #             # cls_loss += extra_info['cls_loss']
+            #             # angle_loss += extra_info['angle_loss']
+            #             # iou_loss += extra_info['iou_loss']
+            #             prec += res_dict['total']['precision']
+            #             rec += res_dict['total']['recall']
+            #             hm += res_dict['total']['hmean']
 
-                        # vbar.set_postfix(val_dict)
-                        vbar.set_postfix(res_dict)
+            #             # vbar.set_postfix(val_dict)
+            #             vbar.set_postfix(res_dict)
             
-            # print('Validate Mean loss: {:.4f} | Elapsed time: {}'.format(
-            #     epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
-            print('Validate Mean Precision: {:.4f} | Mean Recall: {:.4f} | Mean Hmean: {:.4f} | Elapsed time: {}'.format(
-                prec/val_num_batches, rec/val_num_batches, hm/val_num_batches, timedelta(seconds=time.time() - epoch_start)))
+            # # print('Validate Mean loss: {:.4f} | Elapsed time: {}'.format(
+            # #     epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
+            # print('Validate Mean Precision: {:.4f} | Mean Recall: {:.4f} | Mean Hmean: {:.4f} | Elapsed time: {}'.format(
+            #     prec/val_num_batches, rec/val_num_batches, hm/val_num_batches, timedelta(seconds=time.time() - epoch_start)))
             if wandb_plot:
                 wandb.log({'Val/Mean loss': epoch_loss / val_num_batches,
                         'Val/Cls loss': cls_loss/val_num_batches, 
