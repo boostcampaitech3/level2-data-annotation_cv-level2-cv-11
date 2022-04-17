@@ -50,7 +50,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     
     # wandb init
     if wandb_plot:
-        wandb.init(project="ocr-model", entity="canvas11", name = "NAME")
+        wandb.init(project="ocr-model", entity="canvas11", name = "LEE-baseline-batch16")
 
     dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)
     dataset = EASTDataset(dataset)
