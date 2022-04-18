@@ -3,7 +3,7 @@ import os.path as osp
 from random import shuffle
 import time
 import math
-import json
+import numpy as np
 from datetime import timedelta
 from argparse import ArgumentParser
 
@@ -12,7 +12,6 @@ from torch import cuda
 from torch.utils.data import DataLoader
 from torch.optim import lr_scheduler
 from tqdm import tqdm
-from glob import glob
 
 from deteval import calc_deteval_metrics
 from detect import detect, get_bboxes
@@ -42,7 +41,7 @@ def parse_args():
     parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument('--wandb_plot', type=bool, default=False)
     parser.add_argument('--validate', type=bool, default=False)
-    parser.add_argument('--val_interval', type=int, default=5, help='validate per n(default=5) epochs')
+    parser.add_argument('--val_interval', type=int, default=3, help='validate per n(default=3) epochs')
 
     args = parser.parse_args()
 
@@ -59,13 +58,13 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     if wandb_plot:
         wandb.init(project="ocr-model", entity="canvas11", name = "HEO-validate")
 
-    train_dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size) # split에 train의 [].json의 [] 부분을 입력.
+    train_dataset = SceneTextDataset(data_dir, split='cv_new_train', image_size=image_size, crop_size=input_size) # split에 train의 [].json의 [] 부분을 입력.
     train_dataset = EASTDataset(train_dataset)
     train_num_batches = math.ceil(len(train_dataset) / batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
     if validate:
-        val_dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size) # split에 val의 [].json의 [] 부분을 입력.
+        val_dataset = SceneTextDataset(data_dir, split='cv_new_val', image_size=image_size, crop_size=input_size) # split에 val의 [].json의 [] 부분을 입력.
         val_dataset = EASTDataset(val_dataset)
         val_num_batches = math.ceil(len(val_dataset) / batch_size)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
@@ -106,7 +105,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
                 pbar.set_postfix(val_dict)
 
-        print('Train Mean loss: {:.4f} | Elapsed time: {}'.format(
+        print('(Train) Mean loss: {:.4f} | Elapsed time: {}'.format(
             epoch_loss / train_num_batches, timedelta(seconds=time.time() - epoch_start)))    
 
         if wandb_plot:
@@ -118,70 +117,62 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
         if validate and (epoch+1) % val_interval == 0:
             # validate loop
             model.eval()
-            with torch.no_grad():
-                image_fnames, by_sample_bboxes = [], []
-                import cv2
-                images = []
-                for image_fpath in tqdm(glob(osp.join(data_dir, 'images_real/*'))):
-                    image_fnames.append(osp.basename(image_fpath))
+            gt_bboxes, pred_bboxes, trans = [], [], []
+            orig_sizes = []
+            with tqdm(total=val_num_batches) as vbar:
+                for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
+                    vbar.set_description('[Validate]')
+                    for image in img:
+                        orig_sizes.append(image.shape[1:3])
+                    gt_bbox = []
+                    pred_bbox = []
+                    tran = []
+                    with torch.no_grad():
+                        pred_score_map, pred_geo_map = model.forward(img.to(device))
+                    
+                    for gt_score, gt_geo, pred_score, pred_geo, orig_size in zip(gt_score_map.cpu().numpy(), gt_geo_map.cpu().numpy(), pred_score_map.cpu().numpy(), pred_geo_map.cpu().numpy(), orig_sizes):
+                        gt_bbox_angle = get_bboxes(gt_score, gt_geo)
+                        pred_bbox_angle = get_bboxes(pred_score, pred_geo)
+                        if gt_bbox_angle is None:
+                            gt_bbox_angle = np.zeros((0, 4, 2), dtype=np.float32)
+                            tran_angle = []
+                        else:
+                            gt_bbox_angle = gt_bbox_angle[:, :8].reshape(-1, 4, 2)
+                            gt_bbox_angle *= max(orig_size) / input_size
+                            tran_angle = ['null' for _ in range(gt_bbox_angle.shape[0])]
+                        if pred_bbox_angle is None:
+                            pred_bbox_angle = np.zeros((0, 4, 2), dtype=np.float32)
+                        else:
+                            pred_bbox_angle = pred_bbox_angle[:, :8].reshape(-1, 4, 2)
+                            pred_bbox_angle *= max(orig_size) / input_size
+                            
+                        tran.append(tran_angle)
+                        gt_bbox.append(gt_bbox_angle)
+                        pred_bbox.append(pred_bbox_angle)
+                    
+                    vbar.update(1)
+                    gt_bboxes.extend(gt_bbox)
+                    pred_bboxes.extend(pred_bbox)
+                    trans.extend(tran)
 
-                    images.append(cv2.imread(image_fpath)[:, :, ::-1])
-                    if len(images) == batch_size:
-                        by_sample_bboxes.extend(detect(model, images, input_size))
-                        images = []
-
-                if len(images):
-                    by_sample_bboxes.extend(detect(model, images, input_size))
-
-                ufo_result = dict(images=dict())
-                for image_fname, bboxes in zip(image_fnames, by_sample_bboxes):
-                    words_info = {idx: dict(points=bbox.tolist()) for idx, bbox in enumerate(bboxes)}
-                    ufo_result['images'][image_fname] = dict(words=words_info)
-                with open(osp.join(data_dir, 'ufo', 'train.json')) as f:
-                    res_dict = calc_deteval_metrics(pred_bboxes_dict=ufo_result, gt_bboxes_dict=json.load(f))
-                print(res_dict)
-            #     with tqdm(total=val_num_batches) as vbar:
-            #         for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
-            #             vbar.set_description('[Validate]')
-            #             # import cv2
-            #             # print((cv2.imread('/opt/ml/input/data/ICDAR17_Korean/images/0F885DC0-3E65-4081-9DBB-CA96BB6FD4FC.JPG')[:, :, ::-1]).shape)
-            #             # print((cv2.imread('/opt/ml/input/data/ICDAR17_Korean/images/0F885DC0-3E65-4081-9DBB-CA96BB6FD4FC.JPG').shape))
-            #             # print(torch.Tensor(img).permute(0, 2, 3, 1).numpy().shape)
-            #             pred_bboxes = detect(model, torch.Tensor(img).permute(0, 2, 3, 1).numpy(), input_size)
-            #             gt_bboxes = get_bboxes(gt_score_map, gt_geo_map)
-
-            #             res_dict = calc_deteval_metrics(pred_bboxes_dict=pred_bboxes, gt_bboxes_dict=gt_bboxes)
-
-            #             # loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
-                        
-            #             # loss_val = loss.item()
-            #             # epoch_loss += loss_val
-
-            #             vbar.update(1)
-            #             # val_dict = {
-            #             #     'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
-            #             #     'IoU loss': extra_info['iou_loss']
-            #             # }
-
-            #             # cls_loss += extra_info['cls_loss']
-            #             # angle_loss += extra_info['angle_loss']
-            #             # iou_loss += extra_info['iou_loss']
-            #             prec += res_dict['total']['precision']
-            #             rec += res_dict['total']['recall']
-            #             hm += res_dict['total']['hmean']
-
-            #             # vbar.set_postfix(val_dict)
-            #             vbar.set_postfix(res_dict)
+            img_len = len(val_dataset)
+            pred_bboxes_dict, gt_bboxes_dict, trans_dict = dict(), dict(), dict()
+            for img_num in range(img_len):
+                pred_bboxes_dict[f'img_{img_num}'] = pred_bboxes[img_num]
+                gt_bboxes_dict[f'img_{img_num}'] = gt_bboxes[img_num]
+                trans_dict[f'img_{img_num}'] = trans[img_num]
             
-            # # print('Validate Mean loss: {:.4f} | Elapsed time: {}'.format(
-            # #     epoch_loss / val_num_batches, timedelta(seconds=time.time() - epoch_start)))
-            # print('Validate Mean Precision: {:.4f} | Mean Recall: {:.4f} | Mean Hmean: {:.4f} | Elapsed time: {}'.format(
-            #     prec/val_num_batches, rec/val_num_batches, hm/val_num_batches, timedelta(seconds=time.time() - epoch_start)))
+            deteval_dict = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, trans_dict)
+            metric_dict = deteval_dict['total']
+            precision = metric_dict['precision']
+            recall = metric_dict['recall']
+            hmean = metric_dict['hmean']
+            print(f"(Validate) Precision: {precision}, Recall: {recall}, Hmean: {hmean}")
+
             if wandb_plot:
-                wandb.log({'Val/Mean loss': epoch_loss / val_num_batches,
-                        'Val/Cls loss': cls_loss/val_num_batches, 
-                        'Val/Angle loss': angle_loss/val_num_batches,
-                        'Val/IoU loss': iou_loss/val_num_batches})
+                wandb.log({'Val/Precision': precision,
+                        'Val/Recall': recall, 
+                        'Val/Hmean': hmean,})
 
         scheduler.step()
 
