@@ -10,8 +10,8 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, ConcatDataset, Dataset
 
 
-SRC_DATASET_DIR = '/data/datasets/ICDAR17_MLT'  # FIXME
-DST_DATASET_DIR = '/data/datasets/ICDAR17_Korean'  # FIXME
+SRC_DATASET_DIR = '/opt/ml/input/data/ImagesPart2'  # FIXME
+DST_DATASET_DIR = '/opt/ml/input/data/ImagesPart2'  # FIXME
 
 NUM_WORKERS = 32  # FIXME
 
@@ -29,7 +29,7 @@ def get_language_token(x):
 
 def maybe_mkdir(x):
     if not osp.exists(x):
-        os.makedirs(x)
+        os.makedirs(x, exist_ok=True)
 
 
 class MLT17Dataset(Dataset):
@@ -43,11 +43,12 @@ class MLT17Dataset(Dataset):
         for image_path in image_paths:
             sample_id = osp.splitext(osp.basename(image_path))[0]
 
-            label_path = osp.join(label_dir, 'gt_{}.txt'.format(sample_id))
+            label_path = osp.join(label_dir, '{}.txt'.format(sample_id))
+            # print(label_path)
             assert label_path in label_paths
 
             words_info, extra_info = self.parse_label_file(label_path)
-            if 'ko' not in extra_info['languages'] or extra_info['languages'].difference({'ko', 'en'}):
+            if 'ko' not in extra_info['languages'] and 'en' not in extra_info['languages'] : #or extra_info['languages'].difference({'ko', 'en'}):
                 continue
 
             sample_ids.append(sample_id)
@@ -112,13 +113,20 @@ def main():
     dst_image_dir = osp.join(DST_DATASET_DIR, 'images')
     # dst_image_dir = None
 
-    mlt_train = MLT17Dataset(osp.join(SRC_DATASET_DIR, 'raw/ch8_training_images'),
-                             osp.join(SRC_DATASET_DIR, 'raw/ch8_training_gt'),
+    # mlt_train = MLT17Dataset(osp.join(SRC_DATASET_DIR, 'raw/ch8_training_images'),
+    #                          osp.join(SRC_DATASET_DIR, 'raw/ch8_training_gt'),
+    #                          copy_images_to=dst_image_dir)
+    # mlt_valid = MLT17Dataset(osp.join(SRC_DATASET_DIR, 'raw/ch8_validation_images'),
+    #                          osp.join(SRC_DATASET_DIR, 'raw/ch8_validation_gt'),
+    #                          copy_images_to=dst_image_dir)
+    # mlt_merged = ConcatDataset([mlt_train, mlt_valid])
+    mlt_train = MLT17Dataset(osp.join(SRC_DATASET_DIR, 'images'),
+                             osp.join(SRC_DATASET_DIR, 'labels'),
                              copy_images_to=dst_image_dir)
-    mlt_valid = MLT17Dataset(osp.join(SRC_DATASET_DIR, 'raw/ch8_validation_images'),
-                             osp.join(SRC_DATASET_DIR, 'raw/ch8_validation_gt'),
-                             copy_images_to=dst_image_dir)
-    mlt_merged = ConcatDataset([mlt_train, mlt_valid])
+    # mlt_valid = MLT17Dataset(osp.join(SRC_DATASET_DIR, 'raw/ch8_validation_images'),
+    #                          osp.join(SRC_DATASET_DIR, 'raw/ch8_validation_gt'),
+    #                          copy_images_to=dst_image_dir)
+    mlt_merged = ConcatDataset([mlt_train])
 
     anno = dict(images=dict())
     with tqdm(total=len(mlt_merged)) as pbar:

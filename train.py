@@ -5,6 +5,7 @@ import time
 import math
 from datetime import timedelta
 from argparse import ArgumentParser
+import random
 
 import torch
 from torch import cuda
@@ -16,7 +17,14 @@ from east_dataset import EASTDataset
 from dataset import SceneTextDataset
 from model import EAST
 import wandb
+import glob
 
+def seed_everything(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False 
+    random.seed(seed)
 
 def parse_args():
     parser = ArgumentParser()
@@ -29,15 +37,19 @@ def parse_args():
 
     parser.add_argument('--device', default='cuda' if cuda.is_available() else 'cpu')
     parser.add_argument('--num_workers', type=int, default=8)
-
     parser.add_argument('--image_size', type=int, default=1024)
     parser.add_argument('--input_size', type=int, default=512)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--max_epoch', type=int, default=200)
-    parser.add_argument('--save_interval', type=int, default=5)
-    parser.add_argument('--wandb_plot', type=bool, default=False)
-    parser.add_argument('--validate', type=bool, default=False)
+    parser.add_argument('--save_interval', type=int, default=1)
+    parser.add_argument('--wandb_plot', type=bool, default=True)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--add_data_dir', type=str,
+                        default=os.environ.get('SM_CHANNEL_TRAIN', '../input/data/dataset'))
+    parser.add_argument('--add_data_dir2', type=str,
+                        default=os.environ.get('SM_CHANNEL_TRAIN', '../input/data/aihub_inside'))
+    parser.add_argument('--validate', type=bool, default=True)
     parser.add_argument('--val_interval', type=int, default=5, help='validate per n(default=5) epochs')
 
 
@@ -50,19 +62,17 @@ def parse_args():
 
 
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval, wandb_plot, validate, val_interval):
-    
-    # wandb init
-    if wandb_plot:
-        wandb.init(project="ocr-model", entity="canvas11", name = "NAME")
+                learning_rate, max_epoch, save_interval, seed, wandb_plot, add_data_dir, add_data_dir2, validate, val_interval):
+    seed_everything(seed)
+    data_dir_list = [add_data_dir, add_data_dir2]     
 
-    train_dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size) # split에 train의 [].json의 [] 부분을 입력.
+    train_dataset = SceneTextDataset(data_dir_list, split='train', image_size=image_size, crop_size=input_size)
     train_dataset = EASTDataset(train_dataset)
     train_num_batches = math.ceil(len(train_dataset) / batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
     if validate:
-        val_dataset = SceneTextDataset(data_dir, split='train', image_size=image_size, crop_size=input_size)# split에 val의 [].json의 [] 부분을 입력.
+        val_dataset = SceneTextDataset([data_dir], split='train', image_size=image_size, crop_size=input_size)# split에 val의 [].json의 [] 부분을 입력.
         val_dataset = EASTDataset(val_dataset)
         val_num_batches = math.ceil(len(val_dataset) / batch_size)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
@@ -70,14 +80,18 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
+    model.load_state_dict(torch.load('./pths/sehyun.pth'))
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1) # Multi step
-    # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=train_num_batches) # Cosine Annealing
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
 
+    if wandb_plot:
+        wandb.watch(model)
+    model.train()
+    
+    best_loss = 1000
+    example_images = []
     for epoch in range(max_epoch):
-        # train loop
-        model.train()
         epoch_loss, epoch_start = 0, time.time()
         cls_loss, angle_loss, iou_loss = 0, 0, 0
         with tqdm(total=train_num_batches) as pbar:
@@ -103,16 +117,25 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 iou_loss += extra_info['iou_loss']
 
                 pbar.set_postfix(val_dict)
+                if wandb_plot:
+                    example_images.append(wandb.Image(
+                        img[0], caption="loss:{}".format(loss_val)))
+
+        scheduler.step()
+        
+        mean_loss = epoch_loss / train_num_batches
+        if wandb_plot:
+            wandb.log({
+                "Examples": example_images, 
+                'Train/Mean loss':mean_loss,
+                'Train/Cls loss': cls_loss/train_num_batches,
+                'Train/Angle loss': angle_loss/train_num_batches, 
+                'Train/IoU loss': iou_loss/train_num_batches})
 
         print('Mean loss: {:.4f} | Elapsed time: {}'.format(
-            epoch_loss / train_num_batches, timedelta(seconds=time.time() - epoch_start)))    
-
-        if wandb_plot:
-            wandb.log({'Train/Mean loss': epoch_loss / train_num_batches,
-                    'Train/Cls loss': cls_loss/train_num_batches, 
-                    'Train/Angle loss': angle_loss/train_num_batches,
-                    'Train/IoU loss': iou_loss/train_num_batches})
+            mean_loss, timedelta(seconds=time.time() - epoch_start)))
         
+
         if validate and (epoch+1) % val_interval == 0:
             # validate loop
             model.eval()
@@ -165,4 +188,8 @@ def main(args):
 
 if __name__ == '__main__':
     args = parse_args()
+    # wandb init
+    if args.wandb_plot:
+        wandb.init(project="ocr-model", entity="canvas11", name = "NAME")
+        wandb.config.update(args)
     main(args)

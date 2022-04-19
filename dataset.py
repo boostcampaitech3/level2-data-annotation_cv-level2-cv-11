@@ -10,6 +10,7 @@ import albumentations as A
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
 
+from get_rect import minimum_bounding_rectangle as get_mbr
 
 def cal_distance(x1, y1, x2, y2):
     '''calculate the Euclidean distance'''
@@ -220,7 +221,8 @@ def crop_img(img, vertices, labels, length):
         cnt += 1
         start_w = int(np.random.rand() * remain_w)
         start_h = int(np.random.rand() * remain_h)
-        flag = is_cross_text([start_w, start_h], length, new_vertices[labels==1,:])
+        if len(new_vertices) == 2: 
+            flag = is_cross_text([start_w, start_h], length, new_vertices[labels==1,:])
     box = (start_w, start_h, start_w + length, start_h + length)
     region = img.crop(box)
     if new_vertices.size == 0:
@@ -336,12 +338,19 @@ def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
 class SceneTextDataset(Dataset):
     def __init__(self, root_dir, split='train', image_size=1024, crop_size=512, color_jitter=True,
                  normalize=True):
-        with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
-            anno = json.load(f)
+        annos = []
+        image_dir = []
+        for dir in root_dir :
+            image_dir.append(osp.join(dir, 'images'))
+            with open(osp.join(dir, 'ufo/{}.json'.format(split)), 'r', encoding='utf-8-sig') as f:
+                annos.append(json.load(f))
 
-        self.anno = anno
-        self.image_fnames = sorted(anno['images'].keys())
-        self.image_dir = osp.join(root_dir, 'images')
+        self.annos = annos
+        self.image_fnames = []
+        # 받아온 이미지 리스트를 여기서 1개로 합쳐줍니다.
+        for anno in annos :
+            self.image_fnames.extend(sorted(anno['images'].keys()))
+        self.image_dir = image_dir
 
         self.image_size, self.crop_size = image_size, crop_size
         self.color_jitter, self.normalize = color_jitter, normalize
@@ -351,16 +360,23 @@ class SceneTextDataset(Dataset):
 
     def __getitem__(self, idx):
         image_fname = self.image_fnames[idx]
-        image_fpath = osp.join(self.image_dir, image_fname)
-
-        vertices, labels = [], []
-        for word_info in self.anno['images'][image_fname]['words'].values():
-            vertices.append(np.array(word_info['points']).flatten())
-            labels.append(int(not word_info['illegibility']))
-        vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
-
-        vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
-
+        # 그 이미지가 속해 있는 폴더를 찾아가게 합니다.
+        for i, anno in enumerate(self.annos) :
+            if image_fname in anno['images'].keys() :
+                image_fpath = osp.join(self.image_dir[i], image_fname)
+                vertices, labels = [], []
+                for word_info in anno['images'][image_fname]['words'].values():
+                    vertice = np.array(word_info['points'])
+                    if len(vertice) != 4: 
+                        vertice = get_mbr(vertice)
+                    vertices.append(vertice.flatten())
+                    labels.append(int(not word_info['illegibility']))
+                vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
+                vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
+                break
+            else :
+                continue
+        
         image = Image.open(image_fpath)
         image = ImageOps.exif_transpose(image)
         image, vertices = resize_img(image, vertices, self.image_size)
@@ -374,11 +390,51 @@ class SceneTextDataset(Dataset):
 
         funcs = []
         if self.color_jitter:
-            funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
-        if self.normalize:
-            funcs.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
-        transform = A.Compose(funcs)
+            # funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
+            transform = A.Compose([
 
+                # A.RandomScale(scale_limit=0.3, p=0.5),
+                A.PadIfNeeded(512, 512, p=1),
+                # A.RandomCrop(512, 512, p=1.),
+                # A.Downscale(scale_min=0.5, scale_max=0.75, p=0.05),
+
+                # color transforms
+                A.OneOf(
+                    [
+                        A.RandomBrightnessContrast(p=1),
+                        A.RandomGamma(p=1),
+                        A.ChannelShuffle(p=0.2),
+                        A.HueSaturationValue(p=1),
+                        A.RGBShift(p=1),
+                    ],
+                    p=0.5,
+                ),
+                # distortion
+                A.OneOf(
+                    [
+                        A.ElasticTransform(p=1),
+                        A.OpticalDistortion(p=1),
+                        A.GridDistortion(p=1),
+                        A.Perspective(p=1),
+                    ],
+                    p=0.2,
+                ),
+                # noise transforms
+                A.OneOf(
+                    [
+                        A.GaussNoise(p=1),
+                        A.MultiplicativeNoise(p=1),
+                        A.Sharpen(p=1),
+                        A.CLAHE(p=1,clip_limit=5),
+                        A.GaussianBlur(p=1),
+                    ],
+                    p=0.2,
+                ),
+                A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+            ])
+        # if self.normalize:
+        #     funcs.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
+        # transform = A.Compose(funcs)
         image = transform(image=image)['image']
         word_bboxes = np.reshape(vertices, (-1, 4, 2))
         roi_mask = generate_roi_mask(image, vertices, labels)
