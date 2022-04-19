@@ -182,7 +182,7 @@ class EAST(nn.Module):
                                            roi_mask)
         extra_info = dict(**values_dict, score_map=pred_score_map, geo_map=pred_geo_map)
 
-        return loss, extra_info
+        return loss, extra_info, pred_score_map, pred_geo_map
 
 
 if __name__ == '__main__':
