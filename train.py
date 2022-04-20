@@ -35,13 +35,13 @@ def parse_args():
     parser.add_argument('--image_size', type=int, default=1024)
     parser.add_argument('--input_size', type=int, default=512)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
+    parser.add_argument('--learning_rate', type=float, default=1e-5)
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument('--wandb_plot', type=bool, default=True)
     parser.add_argument('--validate', type=bool, default=False)
     parser.add_argument('--val_interval', type=int, default=1, help='validate per n(default=5) epochs')
-
+    parser.add_argument('--pretrained_path', default = '/opt/ml/input/data/models/trained_models_icdar19/epoch_165.pth')
     args = parser.parse_args()
 
     if args.input_size % 32 != 0:
@@ -51,27 +51,30 @@ def parse_args():
 
 
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval, wandb_plot, validate, val_interval):
+                learning_rate, max_epoch, save_interval, wandb_plot, validate, val_interval, pretrained_path):
     
     # wandb init
     if wandb_plot:
-        wandb.init(project="ocr-model", entity="canvas11", name = "LEE-ICDAR19(9465imgs)-batch32-no-val")
+        wandb.init(project="ocr-model", entity="canvas11", name = "LEE-finetuning-batch32-stratified")
 
-    train_dataset = SceneTextDataset(data_dir, split='icdar19_9465', image_size=image_size, crop_size=input_size) # split에 val의 [].json의 [] 부분을 입력.
+    train_dataset = SceneTextDataset(data_dir, split='cv_stratified_train', image_size=image_size, crop_size=input_size) # split에 val의 [].json의 [] 부분을 입력.
     train_dataset = EASTDataset(train_dataset)
     train_num_batches = math.ceil(len(train_dataset) / batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     if validate:
-        val_dataset = SceneTextDataset(data_dir, split='cv_new_val', image_size=image_size, crop_size=input_size)
+        val_dataset = SceneTextDataset(data_dir, split='cv_stratified_val', image_size=image_size, crop_size=input_size)
         val_dataset = EASTDataset(val_dataset)
         val_num_batches = math.ceil(len(val_dataset) / batch_size)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
+    model.load_state_dict(torch.load(pretrained_path))
+    print('loaded')
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
+    # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 4, max_epoch // 2], gamma=0.1)
+    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor = 0.1, patience=15, verbose=True)
 
     for epoch in range(max_epoch):
         # train loop 
@@ -194,7 +197,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                         'Val/IoU loss': iou_loss/val_num_batches
                         })
 
-        scheduler.step()
+        scheduler.step(epoch_loss / val_num_batches) # Mean Loss 기준
 
         if (epoch + 1) % save_interval == 0:
             if not osp.exists(model_dir):
