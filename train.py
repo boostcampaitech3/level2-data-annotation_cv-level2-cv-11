@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument('--wandb_plot', type=bool, default=True)
     parser.add_argument('--validate', type=bool, default=False)
-    parser.add_argument('--val_interval', type=int, default=1, help='validate per n(default=5) epochs')
+    parser.add_argument('--val_interval', type=int, default=5, help='validate per n(default=5) epochs')
     parser.add_argument('--pretrained_path', default = '/opt/ml/input/data/models/trained_models_icdar19/epoch_165.pth')
     args = parser.parse_args()
 
@@ -55,9 +55,9 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     
     # wandb init
     if wandb_plot:
-        wandb.init(project="ocr-model", entity="canvas11", name = "LEE-finetuning-batch32-stratified")
+        wandb.init(project="ocr-model", entity="canvas11", name = "LEE-finetuning-batch32-total-aug")
 
-    train_dataset = SceneTextDataset(data_dir, split='cv_stratified_train', image_size=image_size, crop_size=input_size) # split에 val의 [].json의 [] 부분을 입력.
+    train_dataset = SceneTextDataset(data_dir, split='new_total_train', image_size=image_size, crop_size=input_size) # split에 val의 [].json의 [] 부분을 입력.
     train_dataset = EASTDataset(train_dataset)
     train_num_batches = math.ceil(len(train_dataset) / batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
@@ -73,8 +73,8 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     print('loaded')
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 4, max_epoch // 2], gamma=0.1)
-    scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor = 0.1, patience=15, verbose=True)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
+    # scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor = 0.1, patience=10, verbose=True)
 
     for epoch in range(max_epoch):
         # train loop 
@@ -197,8 +197,8 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                         'Val/IoU loss': iou_loss/val_num_batches
                         })
 
-        scheduler.step(epoch_loss / val_num_batches) # Mean Loss 기준
-
+        # scheduler.step(epoch_loss / val_num_batches) # Mean Loss 기준
+        scheduler.step()
         if (epoch + 1) % save_interval == 0:
             if not osp.exists(model_dir):
                 os.makedirs(model_dir)
