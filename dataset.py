@@ -380,38 +380,10 @@ class SceneTextDataset(Dataset):
 
         funcs = []
         if self.color_jitter:
-            # funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
-            transform = A.Compose([
-
-                # A.RandomScale(scale_limit=0.3, p=0.5),
-                # A.PadIfNeeded(1024, 1024, p=1),
-                # A.RandomCrop(512, 512, p=1.),
-                # A.Downscale(scale_min=0.5, scale_max=0.75, p=0.05),
-
-                # color transforms
-                A.OneOf(
-                    [
-                        A.RandomBrightnessContrast(p=1),
-                        A.RandomGamma(p=1),
-                        A.ChannelShuffle(p=0.2),
-                        A.HueSaturationValue(p=1),
-                        A.RGBShift(p=1),
-                    ],
-                    p=0.5,
-                ),
-                # noise transforms
-                A.OneOf(
-                    [
-                        A.GaussNoise(p=1),
-                        A.MultiplicativeNoise(p=1),
-                        A.Sharpen(p=1),
-                        A.CLAHE(p=1,clip_limit=5),
-                        A.GaussianBlur(p=1),
-                    ],
-                    p=0.2,
-                ),
-                A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-            ])
+            funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
+        if self.normalize:
+            funcs.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
+        transform = A.Compose(funcs)
 
         image = transform(image=image)['image']
         word_bboxes = np.reshape(vertices, (-1, 4, 2))
