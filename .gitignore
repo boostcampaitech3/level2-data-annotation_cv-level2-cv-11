@@ -3,6 +3,8 @@ __pycache__/
 pths/
 wandb/
 trained_models*/
+SEUNGHYUN_WORKSPACE/Pix2Pix/cityscapes
+SEUNGHYUN_WORKSPACE/Pix2Pix/__MACOSX
 
 # Created by https://www.toptal.com/developers/gitignore/api/jupyternotebooks,visualstudiocode,python,macos
 # Edit at https://www.toptal.com/developers/gitignore?templates=jupyternotebooks,visualstudiocode,python,macos

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
-
+'''
+U-Net base Generator
+'''
 class Block(nn.Module):
     def __init__(self, in_channels, out_channels, down=True, activation='relu', use_dropout=False):
         super().__init__()
@@ -50,6 +52,7 @@ class Generator(nn.Module):
         )
     
     def forward(self, x):
+
         d1 = self.initial_down(x)
         d2 = self.down1(d1)
         d3 = self.down2(d2)
@@ -65,6 +68,7 @@ class Generator(nn.Module):
         up5 = self.up5(torch.cat([up4, d4], dim=1))
         up6 = self.up6(torch.cat([up5, d3], dim=1))
         up7 = self.up7(torch.cat([up6, d2], dim=1))
+
         return self.final_up(torch.cat([up7, d1], dim=1))
 
 
