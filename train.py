@@ -38,17 +38,17 @@ def parse_args():
     parser.add_argument('--device', default='cuda' if cuda.is_available() else 'cpu')
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--image_size', type=int, default=1024)
-    parser.add_argument('--input_size', type=int, default=512)
-    parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--input_size', type=int, default=1024)
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--max_epoch', type=int, default=200)
     parser.add_argument('--save_interval', type=int, default=1)
     parser.add_argument('--wandb_plot', type=bool, default=True)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--add_data_dir', type=str,
                         default=os.environ.get('SM_CHANNEL_TRAIN', '../input/data/dataset'))
-    parser.add_argument('--add_data_dir2', type=str,
-                        default=os.environ.get('SM_CHANNEL_TRAIN', '../input/data/aihub_inside'))
+    parser.add_argument('--add_data_dir3', type=str,
+                        default=os.environ.get('SM_CHANNEL_TRAIN', '../input/data/ImagesPart2'))
     parser.add_argument('--validate', type=bool, default=True)
     parser.add_argument('--val_interval', type=int, default=5, help='validate per n(default=5) epochs')
 
@@ -62,9 +62,9 @@ def parse_args():
 
 
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval, seed, wandb_plot, add_data_dir, add_data_dir2, validate, val_interval):
+                learning_rate, max_epoch, save_interval, seed, wandb_plot, add_data_dir, add_data_dir3, validate, val_interval):
     seed_everything(seed)
-    data_dir_list = [add_data_dir, add_data_dir2]     
+    data_dir_list = [data_dir, add_data_dir, add_data_dir3]     
 
     train_dataset = SceneTextDataset(data_dir_list, split='train', image_size=image_size, crop_size=input_size)
     train_dataset = EASTDataset(train_dataset)
@@ -80,9 +80,9 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
-    model.load_state_dict(torch.load('./pths/sehyun.pth'))
+    model.load_state_dict(torch.load('./pths/epoch_165.pth'))
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
     scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
 
     if wandb_plot:
@@ -174,10 +174,18 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
         scheduler.step()
 
+        if best_loss > mean_loss : 
+            if not osp.exists(model_dir):
+                os.makedirs(model_dir)
+            for f in glob.glob(f'{model_dir}/best_model_at_*.pth'):
+                open(f, 'w').close()
+                os.remove(f)
+            ckpt_fpath = osp.join(model_dir, "best_model_at_{}.pth".format(epoch+1))
+            torch.save(model.state_dict(), ckpt_fpath)
+            
         if (epoch + 1) % save_interval == 0:
             if not osp.exists(model_dir):
                 os.makedirs(model_dir)
-
             ckpt_fpath = osp.join(model_dir, 'latest.pth')
             torch.save(model.state_dict(), ckpt_fpath)
 

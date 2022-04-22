@@ -338,6 +338,7 @@ def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
 class SceneTextDataset(Dataset):
     def __init__(self, root_dir, split='train', image_size=1024, crop_size=512, color_jitter=True,
                  normalize=True):
+
         annos = []
         image_dir = []
         for dir in root_dir :
@@ -350,6 +351,7 @@ class SceneTextDataset(Dataset):
         # 받아온 이미지 리스트를 여기서 1개로 합쳐줍니다.
         for anno in annos :
             self.image_fnames.extend(sorted(anno['images'].keys()))
+        
         self.image_dir = image_dir
 
         self.image_size, self.crop_size = image_size, crop_size
@@ -360,6 +362,7 @@ class SceneTextDataset(Dataset):
 
     def __getitem__(self, idx):
         image_fname = self.image_fnames[idx]
+
         # 그 이미지가 속해 있는 폴더를 찾아가게 합니다.
         for i, anno in enumerate(self.annos) :
             if image_fname in anno['images'].keys() :
@@ -390,11 +393,10 @@ class SceneTextDataset(Dataset):
 
         funcs = []
         if self.color_jitter:
-            # funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
             transform = A.Compose([
 
                 # A.RandomScale(scale_limit=0.3, p=0.5),
-                A.PadIfNeeded(512, 512, p=1),
+                # A.PadIfNeeded(512, 512, p=1),
                 # A.RandomCrop(512, 512, p=1.),
                 # A.Downscale(scale_min=0.5, scale_max=0.75, p=0.05),
 
@@ -405,7 +407,7 @@ class SceneTextDataset(Dataset):
                         A.RandomGamma(p=1),
                         A.ChannelShuffle(p=0.2),
                         A.HueSaturationValue(p=1),
-                        A.RGBShift(p=1),
+                        A.RGBShift(r_shift_limit=30, g_shift_limit=30, b_shift_limit=30, p=1),
                     ],
                     p=0.5,
                 ),
@@ -417,18 +419,19 @@ class SceneTextDataset(Dataset):
                         A.GridDistortion(p=1),
                         A.Perspective(p=1),
                     ],
-                    p=0.2,
+                    p=0.1,
                 ),
                 # noise transforms
                 A.OneOf(
                     [
+                        A.ColorJitter(0.5, 0.5, 0.5, 0.25, p=1),
                         A.GaussNoise(p=1),
                         A.MultiplicativeNoise(p=1),
                         A.Sharpen(p=1),
-                        A.CLAHE(p=1,clip_limit=5),
-                        A.GaussianBlur(p=1),
+                        A.CLAHE(p=2,clip_limit=5),
+                        A.MedianBlur(blur_limit=3, p=1),
                     ],
-                    p=0.2,
+                    p=0.4,
                 ),
                 A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
             ])
@@ -439,4 +442,4 @@ class SceneTextDataset(Dataset):
         word_bboxes = np.reshape(vertices, (-1, 4, 2))
         roi_mask = generate_roi_mask(image, vertices, labels)
 
-        return image, word_bboxes, roi_mask
+        return image, word_bboxes, roi_mask 
