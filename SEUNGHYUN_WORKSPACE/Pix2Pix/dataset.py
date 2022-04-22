@@ -26,6 +26,8 @@ class CityScapeDataset(Dataset):
         x_image = transform_input(image=x_image)["image"]
         y_image = transform_target(image=y_image)["image"]
 
+        return x_image, y_image
+
     def __len__(self):
         return len(self.list_files)
 
