@@ -1,15 +1,14 @@
 import os
 import torch
-import config
 from torchvision.utils import save_image
 
-def save_some_examples(gen, val_loader, epoch, folder):
+def save_some_examples(gen, val_loader, epoch, folder, args):
     
     if not os.path.exists(folder):
         os.makedirs(folder)
 
     x, y = next(iter(val_loader))
-    x, y = x.to(config.DEVICE), y.to(config.DEVICE)
+    x, y = x.to(args.device), y.to(args.device)
     gen.eval()
     with torch.no_grad():
         y_fake = gen(x)
@@ -30,9 +29,9 @@ def save_checkpoint(model, optimizer, filename="my_checkpoint.pth.tar"):
     torch.save(checkpoint, filename)
 
 
-def load_checkpoint(checkpoint_file, model, optimizer, lr):
+def load_checkpoint(checkpoint_file, model, optimizer, lr, args):
     print("=> Loading checkpoint")
-    checkpoint = torch.load(checkpoint_file, map_location=config.DEVICE)
+    checkpoint = torch.load(checkpoint_file, map_location=args.device)
     model.load_state_dict(checkpoint["state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer"])
 
