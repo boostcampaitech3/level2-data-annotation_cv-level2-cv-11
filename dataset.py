@@ -1,7 +1,7 @@
 import os.path as osp
 import math
 import json
-from PIL import Image
+from PIL import Image, ImageOps
 
 import torch
 import numpy as np
@@ -10,6 +10,7 @@ import albumentations as A
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
 from get_rect import minimum_bounding_rectangle as get_mbr
+import random
 
 def cal_distance(x1, y1, x2, y2):
     '''calculate the Euclidean distance'''
@@ -232,6 +233,109 @@ def crop_img(img, vertices, labels, length):
     return region, new_vertices
 
 
+def crop_img_ver2(img, vertices, labels, length):
+    '''crop img to fit the bbox position
+    Input:
+        img         : PIL Image
+        vertices    : vertices of text regions <numpy.ndarray, (n,8)>
+        labels      : 1->valid, 0->ignore, <numpy.ndarray, (n,)>
+        length      : length of cropped image region
+    Output:
+        region      : cropped image region
+        new_vertices: new vertices in cropped region
+    '''
+    h, w = img.height, img.width
+
+    # new_vertices = np.zeros(vertices.shape)
+    # if vertices.size > 0:
+    #     new_vertices[:,[0,2,4,6]] = vertices[:,[0,2,4,6]] * ratio_w
+    #     new_vertices[:,[1,3,5,7]] = vertices[:,[1,3,5,7]] * ratio_h
+
+    # 0. Pick some of vertices
+    n_vertices = len(vertices)
+    vertices_list = random.sample(range(n_vertices), random.randint(1, n_vertices))
+
+    new_vertices = vertices[vertices_list, :]
+
+    # 1. get vertices box pos
+    rect_pos = [w, h, 0, 0] # min_x, min_y, max_x, max_y
+    for vertice in new_vertices:
+        rect_pos[0] = min(rect_pos[0], vertice[0], vertice[4])
+        rect_pos[1] = min(rect_pos[1], vertice[1], vertice[5])
+        rect_pos[2] = max(rect_pos[2], vertice[2], vertice[6])
+        rect_pos[3] = max(rect_pos[3], vertice[3], vertice[7])
+
+    # 2. get bboxes inside rect pos
+    new_vertices = []
+    for vertice in vertices:
+        isOut = False
+        for i in vertice[[0, 2, 4, 6]]:
+            if i < rect_pos[0] or i > rect_pos[2]: # X
+                isOut = True
+                break
+        for i in vertice[[1, 3, 5, 7]]:
+            if not isOut and i < rect_pos[1] or i > rect_pos[3]:
+                break
+        if not isOut:
+            new_vertices.append(vertice)
+        else:
+            pos = [0, 0, 0, 0]
+            pos[0] = max(rect_pos[0], vertice[0], vertice[4])
+            pos[1] = max(rect_pos[1], vertice[1], vertice[5])
+            pos[2] = min(rect_pos[2], vertice[2], vertice[6])
+            pos[3] = min(rect_pos[3], vertice[3], vertice[7])
+            w1 = max(0, pos[2] - pos[0] + 1)
+            h1 = max(0, pos[3] - pos[1] + 1)
+            inter = w1 * h1
+
+    # find random position
+    remain_h = img.height - length
+    remain_w = img.width - length
+    flag = True
+    cnt = 0
+    while flag and cnt < 1000:
+        cnt += 1
+        start_w = int(np.random.rand() * remain_w)
+        start_h = int(np.random.rand() * remain_h)
+        if len(new_vertices) == 2:
+            flag = is_cross_text([start_w, start_h], length, new_vertices[labels==1,:])
+    box = (start_w, start_h, start_w + length, start_h + length)
+    region = img.crop(box)
+    if new_vertices.size == 0:
+        return region, new_vertices
+
+    new_vertices[:,[0,2,4,6]] -= start_w
+    new_vertices[:,[1,3,5,7]] -= start_h
+    return region, new_vertices
+
+
+def add_margin(pil_img, size, isWidth, pad):
+    result = Image.new(pil_img.mode, (size, size), (0, 0, 0))
+    if isWidth: # width padding
+        result.paste(pil_img, (pad, 0))
+    else:
+        result.paste(pil_img, (0, pad))
+    return result
+
+
+def resize_with_padding(img, vertices, size):
+    w, h = img.size
+    ratio = size / max(w, h)
+    if w > h:
+        pad = (size - int(h * ratio)) // 2
+        img = img.resize((size, int(h * ratio)), Image.BILINEAR)
+        img = add_margin(img, size, False, pad)
+        new_vertices = vertices * ratio
+        new_vertices[:, [1, 3, 5, 7]] = new_vertices[:, [1, 3, 5, 7]] + pad
+    else:
+        pad = (size - int(w * ratio)) // 2
+        img = img.resize((int(w * ratio), size), Image.BILINEAR)
+        img = add_margin(img, size, True, pad)
+        new_vertices = vertices * ratio
+        new_vertices[:, [0, 2, 4, 6]] = new_vertices[:, [0, 2, 4, 6]] + pad
+    return img, new_vertices
+
+
 def rotate_all_pixels(rotate_mat, anchor_x, anchor_y, length):
     '''get rotated locations of all pixels for next stages
     Input:
@@ -334,20 +438,17 @@ def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
     return new_vertices, new_labels
 
 
+
+
 class SceneTextDataset(Dataset):
     def __init__(self, root_dir, split='train', image_size=1024, crop_size=512, color_jitter=True,
-                 normalize=True, path = ['images', 'new_images']):
+                 normalize=True):
         with open(osp.join(root_dir, 'ufo/{}.json'.format(split)), 'r') as f:
             anno = json.load(f)
 
         self.anno = anno
-        self.path = path # new value
-        self.original_len_img = len(anno['images'])
-        self.image_fnames, self.image_dir = [], []
-        for img in path:
-            self.image_fnames += sorted(anno[img].keys())
-            self.image_dir.append(osp.join(root_dir, img)) # rename
-        print('image size:', self.original_len_img, len(self.image_fnames)-self.original_len_img)
+        self.image_fnames = sorted(anno['images'].keys())
+        self.image_dir = osp.join(root_dir, 'images')
 
         self.image_size, self.crop_size = image_size, crop_size
         self.color_jitter, self.normalize = color_jitter, normalize
@@ -357,33 +458,27 @@ class SceneTextDataset(Dataset):
 
     def __getitem__(self, idx):
         image_fname = self.image_fnames[idx]
-        if int(idx) < self.original_len_img: # count len of original img
-            image_fpath = osp.join(self.image_dir[0], image_fname)
-            self.img_path = self.path[0]
-        else:
-            image_fpath = osp.join(self.image_dir[1], image_fname)
-            self.img_path = self.path[1]
+        image_fpath = osp.join(self.image_dir, image_fname)
 
         vertices, labels = [], []
-        for word_info in self.anno[self.img_path][image_fname]['words'].values(): # Change 'image' to self.img_path
-            ## add part, convert minimum bounding box
+        for word_info in self.anno['images'][image_fname]['words'].values():
             vertice = np.array(word_info['points'])
             if len(vertice) != 4:
-                #print('shape', vertice.shape)
                 vertice = get_mbr(vertice)
-            ###
             vertices.append(vertice.flatten())
             labels.append(int(not word_info['illegibility']))
-
         vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
-        #print('vertices shape', vertices.shape)
+
         vertices, labels = filter_vertices(vertices, labels, ignore_under=10, drop_under=1)
 
         image = Image.open(image_fpath)
-        image, vertices = resize_img(image, vertices, self.image_size)
-        image, vertices = adjust_height(image, vertices)
+        image = ImageOps.exif_transpose(image)
+        # image, vertices = resize_img(image, vertices, self.image_size)
+        image, vertices = resize_with_padding(image, vertices, self.image_size)
+        #image, vertices = adjust_height(image, vertices)
         image, vertices = rotate_img(image, vertices)
-        image, vertices = crop_img(image, vertices, labels, self.crop_size)
+        #image, vertices = crop_img(image, vertices, labels, self.crop_size)
+        #image, vertices = crop_img_ver2(image, vertices, labels, self.crop_size)
 
         if image.mode != 'RGB':
             image = image.convert('RGB')
@@ -391,10 +486,34 @@ class SceneTextDataset(Dataset):
 
         funcs = []
         if self.color_jitter:
-            funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
-        if self.normalize:
-            funcs.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
-        transform = A.Compose(funcs)
+            #f uncs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
+            transform = A.Compose([
+                A.OneOf(
+                    [
+                        A.RandomBrightnessContrast(p=1),
+                        A.RandomGamma(p=1),
+                        A.ChannelShuffle(p=0.2),
+                        A.HueSaturationValue(p=1),
+                        A.RGBShift(p=1),
+                    ],
+                    p=0.5,
+                ),
+                # noise transforms
+                A.OneOf(
+                    [
+                        A.GaussNoise(p=1),
+                        A.MultiplicativeNoise(p=1),
+                        A.IAASharpen(p=1),
+                        A.CLAHE(p=1,clip_limit=5),
+                        A.GaussianBlur(p=1),
+                    ],
+                    p=0.2,
+                ),
+                A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+            ])
+        # if self.normalize:
+        #     funcs.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
+        # transform = A.Compose(funcs)
 
         image = transform(image=image)['image']
         word_bboxes = np.reshape(vertices, (-1, 4, 2))
