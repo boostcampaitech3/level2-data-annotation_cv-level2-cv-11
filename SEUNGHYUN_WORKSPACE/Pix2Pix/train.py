@@ -60,7 +60,12 @@ def train_fn(disc, gen, opt_disc, opt_gen, l1, bce, loader, args):
         opt_gen.zero_grad()
         G_loss.backward()
         opt_gen.step()
-
+        
+        if idx % 10 == 0:
+            loop.set_postfix(
+                D_real=torch.sigmoid(D_real).mean().item(),
+                D_fake=torch.sigmoid(D_fake).mean().item(),
+            )
 
 
 def main(args):
