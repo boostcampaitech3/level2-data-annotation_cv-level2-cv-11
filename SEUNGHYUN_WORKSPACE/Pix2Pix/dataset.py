@@ -21,7 +21,7 @@ class CityScapeDataset(Dataset):
         y_image = image[:, 256:, :]
 
         augs = transform_both(image=x_image, image0=y_image)
-        x_image, y_image = augs["image"], augs["imgae0"]
+        x_image, y_image = augs["image"], augs["image0"]
 
         x_image = transform_input(image=x_image)["image"]
         y_image = transform_target(image=y_image)["image"]
