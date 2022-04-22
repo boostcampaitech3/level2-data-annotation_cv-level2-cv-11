@@ -79,6 +79,9 @@ def main(args):
     valid_dataset = CityScapeDataset(root_dir=args.val_dir)
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
+    if not os.path.exists('./model'):
+        os.makedirs('./model')
+
     for epoch in range(args.num_epochs):
         train_fn(discriminator_model, generator_model, optimizer_discriminator, optimizer_generator, criterion_bce, criterion_l1, train_loader, args)
 
@@ -86,7 +89,7 @@ def main(args):
             save_checkpoint(generator_model, optimizer_generator, "./model/gen.pth.tar")
             save_checkpoint(discriminator_model, optimizer_discriminator, "./model/disc.pth.tar")
         
-        save_some_examples(generator_model, valid_loader, epoch, folder='evaluation')
+        save_some_examples(generator_model, valid_loader, epoch, folder='evaluation', args=args)
 
 if __name__ == "__main__":
     args = parse_args()
