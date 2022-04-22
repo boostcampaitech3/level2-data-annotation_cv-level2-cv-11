@@ -49,6 +49,20 @@ def train_fn(disc, gen, opt_disc, opt_gen, l1, bce, loader, args):
         D_loss.backward()
         opt_disc.step()
 
+        #####################
+        ## Train Generator ##
+        #####################
+        D_fake = disc(x, y_fake)
+        G_fake_loss = bce(D_fake, torch.ones_like(D_fake))
+        L1 = l1(y_fake, y)* args.l1_lambda
+        G_loss = G_fake_loss + L1
+
+        opt_gen.zero_grad()
+        G_loss.backward()
+        opt_gen.step()
+
+
+
 def main(args):
     discriminator_model = Discriminator(in_channels=3).to(args.device)
     generator_model = Generator(in_channels=3).to(args.device)
@@ -69,7 +83,10 @@ def main(args):
         train_fn(discriminator_model, generator_model, optimizer_discriminator, optimizer_generator, criterion_bce, criterion_l1, train_loader, args)
 
         if epoch % 5== 0:
-
+            save_checkpoint(generator_model, optimizer_generator, "./model/gen.pth.tar")
+            save_checkpoint(discriminator_model, optimizer_discriminator, "./model/disc.pth.tar")
+        
+        save_some_examples(generator_model, valid_loader, epoch, folder='evaluation')
 
 if __name__ == "__main__":
     args = parse_args()
