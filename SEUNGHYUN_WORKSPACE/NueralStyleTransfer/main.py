@@ -54,14 +54,14 @@ imsize = 356
 
 loader = transforms.Compose(
     [
-        transforms.Resize((498, 374)), ## 374 × 498
+        transforms.Resize((512, 384)), ## 374 × 498
         transforms.ToTensor(),
         # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ]
 )
 
-original_img = load_image("images/my2.jpg")
-style_img = load_image("style/style4.jpg")
+original_img = load_image("images/my.JPG")
+style_img = load_image("style/style5.jpeg")
 print('origin_image:', original_img.shape)
 print('style_img: ', style_img.shape)
 
@@ -73,7 +73,7 @@ generated = original_img.clone().requires_grad_(True)
 model = VGG().to(device).eval()
 
 # Hyperparameters
-total_steps = 4000
+total_steps = 6000
 learning_rate = 0.001
 alpha = 1
 beta = 0.01
