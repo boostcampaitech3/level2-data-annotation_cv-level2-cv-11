@@ -19,10 +19,14 @@ def parse_args():
     parser.add_argument('--image_size', type=int, default=256)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--learning_rate', type=float, default=2e-4)
-    parser.add_argument('--num_epochs', type=int, default=200)
+    parser.add_argument('--num_epochs', type=int, default=400)
     parser.add_argument('--train_dir', default='cityscapes/train')
     parser.add_argument('--val_dir', default='cityscapes/val')
-    parser.add_argument('--l1_lambda', type=int, default=100)
+    parser.add_argument('--l1_lambda', type=int, default=100),
+    parser.add_argument('--load_model', type=bool, default=True),
+    parser.add_argument('--checkpoint_gen', default='model/gen.pth.tar'),
+    parser.add_argument('--checkpoint_disc', default='model/disc.pth.tar'),
+
     args = parser.parse_args()
 
     return args
@@ -74,6 +78,10 @@ def main(args):
 
     optimizer_discriminator = optim.Adam(discriminator_model.parameters(), lr=args.learning_rate, betas=(0.5, 0.999))
     optimizer_generator = optim.Adam(generator_model.parameters(), lr=args.learning_rate, betas=(0.5, 0.999))
+    
+    if args.load_model:
+        load_checkpoint(args.checkpoint_gen, generator_model, optimizer_generator, args.learning_rate, args.device)
+        load_checkpoint(args.checkpoint_disc, discriminator_model, optimizer_discriminator, args.learning_rate, args.device)
 
     criterion_bce = nn.BCEWithLogitsLoss()
     criterion_l1 = nn.L1Loss()
